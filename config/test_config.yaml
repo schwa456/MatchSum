@@ -1,0 +1,16 @@
+mode: test
+experiment_name: kluebert_matchsum_revised_1
+save_path: ./checkpoints/matchsum-bert/kluebert_matchsum
+gpus: "1"
+
+encoder: klue-bert # must be in ['bert', 'roberta', 'klue-bert']
+
+# Learning Hyperparameter
+batch_size: 16
+accum_count: 1
+candidate_num: 20
+max_lr: 2e-5
+margin: 0.01
+warmup_steps: 10000
+n_epochs: 5
+valid_steps: 1000

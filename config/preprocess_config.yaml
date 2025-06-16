@@ -1,0 +1,4 @@
+tokenizer: klue-bert
+data_path: /home/food/people/hyeonjin/FoodSafetyCrawler/matchsum/MatchSum/aihub_data/data/Training/사설_train_original/train_original_converted.jsonl
+index_path: /home/food/people/hyeonjin/FoodSafetyCrawler/matchsum/MatchSum/aihub_data/data/Training/사설_train_original/train_original_index.jsonl
+write_path: /home/food/people/hyeonjin/FoodSafetyCrawler/matchsum/MatchSum/preprocess/train_train_preprocess.jsonl
