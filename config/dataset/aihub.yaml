@@ -1,8 +1,9 @@
 
 name: aihub
-path: ./aihub_data
+path: /home/food/people/hyeonjin/FoodSafetyCrawler/aihub/
 
 df:
   val_ratio: 0.1
   random_state: 42
   shuffle: True
+  candidate_num: 20

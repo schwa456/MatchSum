@@ -40,7 +40,6 @@ def get_candidate_sum(
         text: str,
         prediction: List[int],
         sum_size: Optional[int] = None,
-        n_block: int = 3
 ):
     """
         주어진 Text와 예측된 문장 Index List를 기반으로 요약 후보 문장 생성
@@ -49,10 +48,10 @@ def get_candidate_sum(
 
     can_sum = []
     for i, sent_id in enumerate(prediction):
+        if sent_id >= len(text):
+            continue
         sent = text[sent_id]
-        # n-gram 중복이 없을 경우에만 요약 문장으로 추가
-        if not ngram_blocking(sent, can_sum, n_block):
-            can_sum.append(sent)
+        can_sum.append(sent)
         
         # 최대 문장 수 제한 도달 시 중단
         if sum_size and (len(can_sum) == sum_size):

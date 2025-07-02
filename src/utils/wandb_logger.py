@@ -3,7 +3,6 @@ import os
 from pytorch_lightning.loggers.wandb import *
 from typing import Optional, Dict
 import wandb
-from wandb import WandbLogger
 
 class My_WandbLogger(WandbLogger):
     __doc__ = r"""
@@ -104,7 +103,7 @@ class My_WandbLogger(WandbLogger):
                                           description = self._artifact_description,
                                           metadata=metadata)
 
-                artifact.add_file(p, name='model.chpt')
+                artifact.add_file(p, name='model.ckpt')
 
                 if self._artifact_save_files:
                     [artifact.add_file(f, name=n) for n, f in self._artifact_save_files.items()]
@@ -118,7 +117,7 @@ class My_WandbLogger(WandbLogger):
     @classmethod
     def remove_cache(cls, dir_path: str):
         if os.path.exists(dir_path):
-            print("Every wandb cache files will be cleared. If you wanr, please enter Yes:")
+            print("Every wandb cache files will be cleared. If you want, please enter Yes:")
 
             if input() in ['yes', 'Yes']:
                 shutil.rmtree(dir_path)

@@ -1,107 +1,95 @@
-import torch
-import pandas as pd
-from typing import Union
 from torch.utils.data import Dataset
-from transformers import PretrainedTokenizer, PretrainedTokenizerFast, BatchEncoding
+from collections import defaultdict
+from transformers import PreTrainedTokenizer
+import json, torch, ast
 
-class MatchSum_Dataset(Dataset):
-    __dor__ = r"""
-            Referred to the repos below;
-        https://github.com/nlpyang/PreSumm
-        https://github.com/KPFBERT/kpfbertsum
+class MatchSumDataset(Dataset):
+    def __init__(self, df, tokenizer: PreTrainedTokenizer, max_len=512):
+        self.df = df
+        self.tokenizer = tokenizer
+        self.max_len = max_len
+        
+        self.flat_rows = []
+        for i, row in df.iterrows():
+            text = row['text']
+            doc_text = ''.join(text)
+            label_idx = row['label']
+            cands = ast.literal_eval(row['candidates'])
+            for i, cand in enumerate(cands):
+                self.flat_rows.append({
+                    'doc': doc_text,
+                    'cand': '\n'.join(cand),
+                    'label': int(i == label_idx)
+                })
 
-        Returns:
-            ids: 'id' value of the data, which is to index the document from the prediction
-            encodings: input_ids, token_type_ids, attention_mask
-                token_type_ids alternates between 0 and 1 to separate the sentences
-            cls_token_ids: identify CLS tokens representing sentences among all tokens
-            ext_label: extractive label to train in sentence-level binary classification
-"""
-
-def __init__(
-        self,
-        data: pd.DataFrame,
-        tokenizer: Union[PretrainedTokenizer, PretrainedTokenizerFast],
-        max_seq_len: int=None,
-):
-    self.data = data
-    self.tokenizer = tokenizer
-    self.max_seq_len = max_seq_len
-    self.pad = tokenizer.pad_token_id
-
-
-def __len__(self):
-    return len(self.data)
-
-def __getitem__(self, index: int):
-    row = self.data.iloc[index]
-
-    # Load and Tokenize Each Sentence
-    encodings = []
-    for sent in row['text']:
-        encoding = self.tokenizer(
-            sent,
-            add_special_token=True,
+    def __getitem__(self, idx):
+        row = self.flat_rows[idx]
+        print(f"\n[DEBUG] row: {row}")
+        print(f"\n[DEBUG] doc: {row['doc']}, \ncandidate: {row['cand']}, \nlabel: {row['label']}")
+        print(f"\n[DEBUG] type(doc): {type(row['doc'])}, \ncandidate: {type(row['cand'])}, \nlabel: {type(row['label'])}")
+        doc = row['doc']
+        cand = row['cand']
+        label = row['label']
+        
+        doc_sents = doc.strip().split('\n')
+        cand_sents = cand.strip().split('\n')
+        
+        def encode_with_cls_indices(sents, tokenizer, max_len):
+            input_ids = []
+            cls_indices = []
+            for sent in sents:
+                tokens = tokenizer.encode(sent, add_special_tokens=True)
+                if len(input_ids) + len(tokens) > max_len:
+                    break
+                cls_indices.append(len(input_ids))
+                input_ids.extend(tokens)
+            attention_mask = [1] * len(input_ids)
+            return input_ids, attention_mask, cls_indices
+        
+        doc_input_ids, doc_attention_mask, doc_cls_indices = encode_with_cls_indices(
+            doc_sents, self.tokenizer, self.max_len
         )
-        encodings.append(encoding)
+        cand_input_ids, cand_attention_mask, cand_cls_indices = encode_with_cls_indices(
+            cand_sents, self.tokenizer, self.max_len
+        )
+        
+        def pad(toks, length):
+            return toks + [0] * (length - len(toks))
+        
+        doc_input_ids = pad(doc_input_ids, self.max_len)
+        doc_attention_mask = pad(doc_attention_mask, self.max_len)
+        cand_input_ids = pad(cand_input_ids, self.max_len)
+        cand_attention_mask = pad(cand_attention_mask, self.max_len)
+
+        return {
+            'doc_input_ids': torch.tensor(doc_input_ids),
+            'doc_attention_mask': torch.tensor(doc_attention_mask),
+            'doc_cls_indices': torch.tensor(doc_cls_indices),
+            'cand_input_ids': torch.tensor(cand_input_ids),
+            'cand_attention_mask': torch.tensor(cand_attention_mask),
+            'cand_cls_indices': torch.tensor(cand_cls_indices),
+            'label': torch.tensor(label, dtype=torch.long)
+        }
     
-    input_ids, token_type_ids, attention_mask = [], [], []
-    ext_label, cls_token_ids = [], []
-
-    # Seperate each of sequences
-    seq_id = 0
-    for enc in encodings:
-        if seq_id > 1:
-            seq_id = 0
-        cls_token_ids += [len(input_ids)] # each [CLS] symbol collects features for the sentences preceeding it
-        input_ids += enc['input_ids']
-        token_type_ids += len(enc['input_ids']) * [seq_id]
-        attention_mask += len(enc['input_ids']) * [1]
-
-        if encoding.index[enc] in row['extractive']:
-            ext_label += [1] # Right Answer
-        else:
-            ext_label += [0]
-        
-        seq_id += 1
-
-        # Truncate Inputs
-        if len(input_ids) == self.max_seq_len:
-            break
-
-        elif (input_ids) > self.max_seq_len:
-            sep = input_ids[-1] # SEP token
-            input_ids = input_ids[:self.max_seq_len - 1] + [sep]
-            token_type_ids = token_type_ids[:self.max_seq_len]
-            attention_mask = attention_mask[:self.max_seq_len]
-            break
-
-        # Padding Input
-        if len(input_ids) < self.max_seq_len:
-            pad_len = self.max_seq_len - len(input_ids)
-            input_ids += pad_len * [self.pad]
-            token_type_ids += pad_len * [0]
-            attention_mask += pad_len * [0]
-
-        # Adjust for MatchSum_Ext
-        # 모델에 입력으로 넣기 위해 길이를 통일 시킴
-        if len(cls_token_ids) < self.max_seq_len:
-            pad_len = self.max_seq_len - len(cls_token_ids)
-            cls_token_ids += pad_len * [-1]
-            ext_label += pad_len * [0]
-        
-        encodings = BatchEncoding(
-            {
-                'input_ids': torch.tensor(input_ids),
-                'token_type_ids': torch.tensor(token_type_ids),
-                'attention_mask': torch.tensor(attention_mask)
-            }
-        )
-
-        return dict(
-            id=row['id'],
-            encodings=encodings,
-            cls_token_ids=torch.tensor(cls_token_ids),
-            ext_label=torch.tensor(ext_label)
-        )
-
+    def __len__(self):
+        return len(self.flat_rows)
+    
+if __name__ == '__main__':
+    import pandas as pd
+    from transformers import AutoTokenizer
+    train_df = pd.read_csv('/home/food/people/hyeonjin/FoodSafetyCrawler/matchsum/MatchSumRevised/data/train_df.csv')
+    tokenizer = AutoTokenizer.from_pretrained('klue/bert-base')
+    
+    candidates = train_df.loc[0, 'candidates']
+    candidates_list = ast.literal_eval(candidates)
+    print(f"Number of candidates for doc 0: {len(candidates_list)}")
+    
+    train_dataset = MatchSumDataset(train_df, tokenizer)
+    
+    print(train_dataset[0])
+    print(train_dataset[1])
+    
+    for i in range(10):
+        print(train_dataset[i])
+    
+    print(len(train_df))

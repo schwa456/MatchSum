@@ -1,8 +1,7 @@
 import torch
-from torch import nn
-from torch.nn import init
-
-from transformers import BertModel, RobertaModel, BertTokenizer, RobertaTokenizer
+from transformers import AutoModel, AutoTokenizer
+from typing import Optional, Dict
+from .metric import *
 
 class MatchSum(nn.Module):
 
@@ -13,64 +12,78 @@ class MatchSum(nn.Module):
     
     def __init__(
             self,
-            candidate_num, 
-            encoder, 
-            hidden_size=768
-        ):
+            candidate_num: Optional[int],
+            tokenizer: Optional[str],
+            margin: Optional[float],
+            hidden_size: int = 768
+    ):
         super(MatchSum, self).__init__()
-        
-        self.hidden_size = hidden_size
-        self.candidate_num  = candidate_num
-        
-        if encoder == 'bert':
-            self.encoder = BertModel.from_pretrained('bert-base-uncased')
-            self.tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
-        elif encoder == 'roberta':
-            self.encoder = RobertaModel.from_pretrained('roberta-base')
-            self.tokenizer = RobertaTokenizer.from_pretrained('roberta-base')
-        elif encoder == 'klue-bert':
-            self.encoder = BertModel.from_pretrained('klue/bert-base')
-            self.tokenizer = BertTokenizer.from_pretrained('klue/bert-base')
 
-    def forward(self, text_id, candidate_id, summary_id):
+        self.hidden_size = hidden_size
+        self.candidate_num = candidate_num
+
+        self.encoder = AutoModel.from_pretrained(tokenizer)
+        self.tokenizer = AutoTokenizer.from_pretrained(tokenizer)
+
+        self.loss_fn = MarginRankingLoss(margin=margin)
+
+            # Check whether Model Params are frozen
+        for name, param in self.named_parameters():
+            if not param.requires_grad:
+                print("[Frozen]", name)
+
+
+    def forward(self, 
+                text_id: Dict[str, torch.Tensor], 
+                candidate_id: Dict[str, torch.Tensor], 
+                summary_id: Dict[str, torch.Tensor]):
         
-        batch_size = text_id.size(0)
-        
-        pad_id = self.tokenizer.pad_token_id
+        batch_size, candidate_num, seq_len = candidate_id['input_ids'].size()
 
         # get document embedding
-        input_mask = ~(text_id == pad_id)
-        out = self.encoder(text_id, attention_mask=input_mask)[0] # last layer
-        doc_emb = out[:, 0, :]
+        doc_out = self.encoder(
+            input_ids = text_id['input_ids'], 
+            attention_mask = text_id['attention_mask']
+        )[0] # last layer
+        doc_emb = doc_out[:, 0, :]
         assert doc_emb.size() == (batch_size, self.hidden_size) # [batch_size, hidden_size]
         
         # get summary embedding
-        input_mask = ~(summary_id == pad_id)
-        out = self.encoder(summary_id, attention_mask=input_mask)[0] # last layer
-        summary_emb = out[:, 0, :]
-        assert summary_emb.size() == (batch_size, self.hidden_size) # [batch_size, hidden_size]
+        sum_out = self.encoder(
+            input_ids=summary_id['input_ids'],
+            attention_mask=summary_id['attention_mask']
+        )[0] # last layer
+        sum_emb = sum_out[:, 0, :]
+        assert sum_emb.size() == (batch_size, self.hidden_size) # [batch_size, hidden_size]
 
-        # get summary score
-        summary_score = torch.cosine_similarity(summary_emb, doc_emb, dim=-1)
+        candidate_input_ids = candidate_id['input_ids'].view(-1, seq_len)
+        candidate_attention = candidate_id['attention_mask'].view(-1, seq_len)
 
         # get candidate embedding
-        candidate_num = candidate_id.size(1)
-        candidate_id = candidate_id.view(-1, candidate_id.size(-1))
-        input_mask = ~(candidate_id == pad_id)
-        out = self.encoder(candidate_id, attention_mask=input_mask)[0]
-        candidate_emb = out[:, 0, :].view(batch_size, candidate_num, self.hidden_size)  # [batch_size, candidate_num, hidden_size]
+        cand_out = self.encoder(
+            input_ids=candidate_input_ids,
+            attention_mask=candidate_attention
+        )[0]
+        candidate_emb = cand_out[:, 0, :].view(batch_size, candidate_num, self.hidden_size)  # [batch_size, candidate_num, hidden_size]
         assert candidate_emb.size() == (batch_size, candidate_num, self.hidden_size)
+
+        # get summary score
+        summary_score = torch.cosine_similarity(sum_emb, doc_emb, dim=-1)
         
         # get candidate score
-        doc_emb = doc_emb.unsqueeze(1).expand_as(candidate_emb)
-        score = torch.cosine_similarity(candidate_emb, doc_emb, dim=-1) # [batch_size, candidate_num]
-        assert score.size() == (batch_size, candidate_num)
+        doc_exp = doc_emb.unsqueeze(1).expand_as(candidate_emb)
+        cand_score = torch.cosine_similarity(candidate_emb, doc_exp, dim=-1) # [batch_size, candidate_num]
+        assert cand_score.size() == (batch_size, candidate_num)
+        pred_idx = torch.argmax(cand_score, dim=1)
 
-        pred_idx = torch.argmax(score, dim=1)
+        loss = None
+        if summary_id is not None:
+            loss = self.loss_fn(score=cand_score, summary_score=summary_score)
 
         return {
-            'score': score, 
+            'score': cand_score, 
             'summary_score': summary_score,
-            'pred_index': pred_idx
-            }
+            'prediction': pred_idx,
+            'loss': loss
+        }
 
